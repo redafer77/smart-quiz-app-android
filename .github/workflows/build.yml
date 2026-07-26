@@ -24,14 +24,8 @@ jobs:
         
           sudo apt update
           
-          sudo apt install -y build-essential git python3-dev ffmpeg \
+          sudo apt install -y build-essential git python3-dev ffmpeg libsdl2-dev libsdl2-image-dev libsdl2-mixer-dev libsdl2-ttf-dev libportmidi-dev libswscale-dev libavformat-dev libavcodec-dev zlib1g-dev openjdk-17-jdk unzip
           
-            libsdl2-dev libsdl2-image-dev libsdl2-mixer-dev libsdl2-ttf-dev \
-            
-            libportmidi-dev libswscale-dev libavformat-dev libavcodec-dev \
-            
-            zlib1g-dev openjdk-17-jdk unzip
-            
       - name: Install buildozer
       
         run: pip install buildozer cython==0.29.33
@@ -47,7 +41,7 @@ jobs:
           name: apk
           
           path: bin/*.apk
-
+          
 
 
 
