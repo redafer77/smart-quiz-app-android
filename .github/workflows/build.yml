@@ -1,0 +1,69 @@
+name: Build APK
+
+on: [push, workflow_dispatch]
+
+jobs:
+
+  build:
+  
+    runs-on: ubuntu-latest
+    
+    steps:
+    
+      - uses: actions/checkout@v3
+      
+      - uses: actions/setup-python@v4
+      
+        with:
+        
+          python-version: '3.10'
+          
+      - name: Install system deps
+      
+        run: |
+        
+          sudo apt update
+          
+          sudo apt install -y build-essential git python3-dev ffmpeg \
+          
+            libsdl2-dev libsdl2-image-dev libsdl2-mixer-dev libsdl2-ttf-dev \
+            
+            libportmidi-dev libswscale-dev libavformat-dev libavcodec-dev \
+            
+            zlib1g-dev openjdk-17-jdk unzip
+            
+      - name: Install buildozer
+      
+        run: pip install buildozer cython==0.29.33
+        
+      - name: Build APK
+      
+        run: buildozer -v android debug
+        
+      - uses: actions/upload-artifact@v3
+      
+        with:
+        
+          name: apk
+          
+          path: bin/*.apk
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
