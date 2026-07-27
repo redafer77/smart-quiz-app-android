@@ -5,13 +5,13 @@ package.domain = org.quizapp
 source.dir = .
 source.include_exts = py,png,jpg,kv,atlas,txt
 version = 1.0
-requirements = python3,kivy,cython
+requirements = python3,kivy==2.3.0,cython==0.29.36
 orientation = portrait
 fullscreen = 0
 android.permissions = WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE
 android.api = 33
 android.minapi = 21
-android.ndk = 25b
+android.ndk = 23b
 android.arch = arm64-v8a
 [buildozer]
 log_level = 2
