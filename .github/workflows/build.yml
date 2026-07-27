@@ -52,7 +52,7 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install buildozer==1.5.0
-          pip install cython==0.29.33
+          pip install "cython>=3.0.0"
 
       - name: Setup Android SDK
         run: |
@@ -83,11 +83,9 @@ jobs:
             --sdk_root=$SDK_DIR \
             "platform-tools" \
             "build-tools;34.0.0" \
-            "platforms;android-33" 2>&1 | tail -10
+            "platforms;android-33" 2>&1 | tail -5
 
           echo "✅ Android SDK setup complete"
-          echo "JAVA_HOME: $JAVA_HOME"
-          java -version
 
       - name: Build APK
         run: |
