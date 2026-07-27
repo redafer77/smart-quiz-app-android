@@ -1,0 +1,15 @@
+.buildozer/
+bin/
+__pycache__/
+*.py[cod]
+*.apk
+*.aab
+.kivy/
+# ملفات بيانات تُنشأ وقت التشغيل في جذر المشروع (النسخة المضمَّنة في data/ متتبَّعة)
+/questions.json
+/settings.json
+/history.json
+/questions_export.txt
+/questions.txt
+.venv/
+.DS_Store

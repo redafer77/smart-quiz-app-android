@@ -1,11 +1,31 @@
 name: Build APK
 
-on: [push, workflow_dispatch]
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
-  build:
+  test:
+    name: اختبارات المنطق
     runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: تشغيل الاختبارات
+        run: python3 tests/run_tests.py
 
+  build:
+    name: بناء APK
+    needs: test
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
@@ -19,30 +39,11 @@ jobs:
         run: |
           sudo apt-get update -y
           sudo apt-get install -y \
-            build-essential \
-            git \
-            python3-dev \
-            python3-pip \
-            ffmpeg \
-            libsdl2-dev \
-            libsdl2-image-dev \
-            libsdl2-mixer-dev \
-            libsdl2-ttf-dev \
-            libportmidi-dev \
-            libswscale-dev \
-            libavformat-dev \
-            libavcodec-dev \
-            zlib1g-dev \
-            unzip \
-            zip \
-            autoconf \
-            libtool \
-            pkg-config \
-            libncurses5-dev \
-            libncursesw5-dev \
-            cmake \
-            libffi-dev \
-            libssl-dev
+            build-essential git python3-dev python3-pip ffmpeg \
+            libsdl2-dev libsdl2-image-dev libsdl2-mixer-dev libsdl2-ttf-dev \
+            libportmidi-dev libswscale-dev libavformat-dev libavcodec-dev \
+            zlib1g-dev unzip zip autoconf libtool pkg-config \
+            libncurses5-dev libncursesw5-dev cmake libffi-dev libssl-dev
 
       - name: Install buildozer and dependencies
         run: |
@@ -50,13 +51,22 @@ jobs:
           pip install buildozer==1.5.0
           pip install cython==3.0.11
 
+      - name: Cache buildozer global directory
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.buildozer
+            .buildozer
+          key: buildozer-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
+          restore-keys: buildozer-${{ runner.os }}-
+
       - name: Setup Android SDK
         run: |
           SDK_DIR=$HOME/.buildozer/android/platform/android-sdk
           mkdir -p $SDK_DIR
           wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O /tmp/cmdline-tools.zip
           mkdir -p $SDK_DIR/cmdline-tools
-          unzip -q /tmp/cmdline-tools.zip -d $SDK_DIR/cmdline-tools
+          unzip -q -o /tmp/cmdline-tools.zip -d $SDK_DIR/cmdline-tools
           mv $SDK_DIR/cmdline-tools/cmdline-tools $SDK_DIR/cmdline-tools/latest 2>/dev/null || true
           mkdir -p $SDK_DIR/tools/bin
           ln -sf $SDK_DIR/cmdline-tools/latest/bin/sdkmanager $SDK_DIR/tools/bin/sdkmanager
@@ -66,13 +76,21 @@ jobs:
           echo -e "\n84831b9409646a918e30573bab4c9c91346d8abd" >> $SDK_DIR/licenses/android-sdk-license
           echo -e "\nd975f751698a77b662f1254ddbeed3901e976f5a" >> $SDK_DIR/licenses/android-sdk-license
           echo -e "\n33b6a2b64607f11b759f320ef9dff4ae5c47d97a" > $SDK_DIR/licenses/android-sdk-preview-license
-          $SDK_DIR/cmdline-tools/latest/bin/sdkmanager --sdk_root=$SDK_DIR "platform-tools" "build-tools;34.0.0" "platforms;android-33" 2>&1 | tail -5
+          $SDK_DIR/cmdline-tools/latest/bin/sdkmanager --sdk_root=$SDK_DIR \
+            "platform-tools" "build-tools;34.0.0" "platforms;android-33" 2>&1 | tail -5
 
       - name: Build APK
+        run: buildozer -v android debug 2>&1
+
+      - name: Rename APK
+        id: apk
         run: |
-          buildozer -v android debug 2>&1
-        env:
-          JAVA_HOME: ${{ env.JAVA_HOME }}
+          FILE=$(ls bin/*.apk | head -1)
+          NAME="smart-quiz-$(grep -m1 '^version' buildozer.spec | tr -d ' ' | cut -d= -f2).apk"
+          cp "$FILE" "bin/$NAME"
+          echo "path=bin/$NAME" >> $GITHUB_OUTPUT
+          echo "name=$NAME" >> $GITHUB_OUTPUT
+          ls -la bin/
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -81,3 +99,10 @@ jobs:
           name: smart-quiz-apk
           path: bin/*.apk
           if-no-files-found: warn
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.apk.outputs.path }}
+          generate_release_notes: true
