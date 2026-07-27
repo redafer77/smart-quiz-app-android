@@ -13,6 +13,12 @@ jobs:
         with:
           python-version: '3.10'
 
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
       - name: Install system deps
         run: |
           sudo apt-get update -y
@@ -31,7 +37,6 @@ jobs:
             libavformat-dev \
             libavcodec-dev \
             zlib1g-dev \
-            openjdk-17-jdk \
             unzip \
             zip \
             autoconf \
@@ -43,19 +48,14 @@ jobs:
             libffi-dev \
             libssl-dev
 
-      - name: Set JAVA_HOME
-        run: |
-          echo "JAVA_HOME=$(dirname $(dirname $(readlink -f $(which java))))" >> $GITHUB_ENV
-
       - name: Install buildozer and dependencies
         run: |
           pip install --upgrade pip
           pip install buildozer==1.5.0
           pip install cython==0.29.33
 
-      - name: Setup Android SDK with sdkmanager in tools/bin
+      - name: Setup Android SDK
         run: |
-          # إنشاء مجلد Android SDK
           SDK_DIR=$HOME/.buildozer/android/platform/android-sdk
           mkdir -p $SDK_DIR
 
@@ -65,12 +65,12 @@ jobs:
           unzip -q /tmp/cmdline-tools.zip -d $SDK_DIR/cmdline-tools
           mv $SDK_DIR/cmdline-tools/cmdline-tools $SDK_DIR/cmdline-tools/latest 2>/dev/null || true
 
-          # إنشاء sdkmanager في المسار القديم الذي يبحث عنه buildozer
+          # إنشاء sdkmanager في المسار القديم الذي يبحث عنه buildozer 1.5.0
           mkdir -p $SDK_DIR/tools/bin
           ln -sf $SDK_DIR/cmdline-tools/latest/bin/sdkmanager $SDK_DIR/tools/bin/sdkmanager
           ln -sf $SDK_DIR/cmdline-tools/latest/bin/avdmanager $SDK_DIR/tools/bin/avdmanager
 
-          # قبول جميع التراخيص
+          # قبول جميع التراخيص مسبقاً
           mkdir -p $SDK_DIR/licenses
           echo -e "\n24333f8a63b6825ea9c5514f83c2829b004d1fee" > $SDK_DIR/licenses/android-sdk-license
           echo -e "\n84831b9409646a918e30573bab4c9c91346d8abd" >> $SDK_DIR/licenses/android-sdk-license
@@ -78,14 +78,16 @@ jobs:
           echo -e "\n33b6a2b64607f11b759f320ef9dff4ae5c47d97a" > $SDK_DIR/licenses/android-sdk-preview-license
           echo -e "\n601085b94cd77f0b54ff86406957099ebe79c4d6" > $SDK_DIR/licenses/android-googletv-license
 
-          # تثبيت build-tools و platform-tools
-          yes | $SDK_DIR/cmdline-tools/latest/bin/sdkmanager \
+          # تثبيت platform-tools و build-tools
+          $SDK_DIR/cmdline-tools/latest/bin/sdkmanager \
+            --sdk_root=$SDK_DIR \
             "platform-tools" \
             "build-tools;34.0.0" \
-            "platforms;android-33" 2>&1 | tail -5
+            "platforms;android-33" 2>&1 | tail -10
 
-          echo "Android SDK setup complete"
-          ls $SDK_DIR/tools/bin/
+          echo "✅ Android SDK setup complete"
+          echo "JAVA_HOME: $JAVA_HOME"
+          java -version
 
       - name: Build APK
         run: |
