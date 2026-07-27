@@ -53,11 +53,31 @@ jobs:
           pip install buildozer==1.5.0
           pip install cython==0.29.33
 
+      - name: Accept Android SDK licenses
+        run: |
+          mkdir -p $HOME/.android
+          touch $HOME/.android/repositories.cfg
+          # قبول جميع تراخيص Android SDK
+          yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --licenses 2>/dev/null || true
+          yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager "build-tools;37.0.0" 2>/dev/null || true
+          # إنشاء ملف قبول التراخيص يدوياً
+          mkdir -p $HOME/.android
+          for f in $ANDROID_SDK_ROOT/licenses/*.txt; do
+            fname=$(basename "$f")
+            mkdir -p $ANDROID_SDK_ROOT/licenses
+            cat "$f" > $ANDROID_SDK_ROOT/licenses/"$fname" 2>/dev/null || true
+          done
+          # قبول تراخيص buildozer
+          mkdir -p $HOME/.buildozer/android/platform
+          echo "y" > /tmp/accept_licenses.txt
+
       - name: Build APK
         run: |
-          buildozer -v android debug 2>&1
+          # قبول التراخيص تلقائياً خلال buildozer
+          yes | buildozer -v android debug 2>&1 || buildozer -v android debug 2>&1
         env:
           JAVA_HOME: ${{ env.JAVA_HOME }}
+          ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
