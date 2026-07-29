@@ -21,6 +21,13 @@ jobs:
           python-version: '3.11'
       - name: تشغيل الاختبارات
         run: python3 tests/run_tests.py
+      - name: تحقق من بنك الأسئلة
+        # يفحص التكرار وتوازن مواضع الإجابة وانحياز أطوال الخيارات،
+        # ثم يتأكد أن questions.json مطابق لملفات المصدر
+        run: |
+          python3 tools/build_bank.py
+          git diff --exit-code -- data/questions.json \
+            || { echo "::error::data/questions.json لا يطابق data/source — أعد تشغيل tools/build_bank.py والتزم الناتج"; exit 1; }
 
   build:
     name: بناء APK

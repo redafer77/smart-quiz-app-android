@@ -103,6 +103,41 @@ def balance_answers(questions):
     return moved
 
 
+# الحد الأقصى لنسبة إصابة استراتيجية «اختر الأطول»؛ الصدفة 25%
+BIAS_LIMIT = 0.34
+
+
+def length_bias(bank, ratio=1.3):
+    """نسبة الأسئلة التي يكون فيها الخيار الأطول بوضوح هو الصحيح.
+
+    الخيار الأطول بوضوح = أطول من ثانيه بنسبة `ratio` على الأقل، فذلك ما تراه
+    العين. إن اقتربت النسبة من 25% لم يُفد طول الخيار في التخمين.
+    """
+    hits = total = 0
+    for item in bank:
+        lengths = [len(opt) for opt in item["options"]]
+        longest = max(lengths)
+        if lengths.count(longest) > 1 or longest < ratio * sorted(lengths)[-2]:
+            continue
+        total += 1
+        if lengths[item["answer"]] == longest:
+            hits += 1
+    return hits, total
+
+
+def check_length_bias(bank):
+    """يمنع عودة الانحياز: إجابة صحيحة أطول من مشتّتاتها تكشف نفسها."""
+    hits, total = length_bias(bank)
+    if not total:
+        return
+    rate = hits / float(total)
+    print("انحياز الطول: الأطول بوضوح صحيح في %d من %d سؤال (%.0f%%، الصدفة 25%%)"
+          % (hits, total, rate * 100))
+    if rate > BIAS_LIMIT:
+        fail("الخيار الأطول يكشف الإجابة في %.0f%% من الأسئلة (الحد %.0f%%). "
+             "أطِل المشتّتات في الأسئلة المنحازة." % (rate * 100, BIAS_LIMIT * 100))
+
+
 def main():
     if not os.path.isdir(SOURCE_DIR):
         fail("مجلد المصدر غير موجود: %s" % SOURCE_DIR)
@@ -150,6 +185,7 @@ def main():
         print("فئات بلا ملف مصدر (تُتجاهل): %s" % "، ".join(missing))
     if not bank:
         fail("لم يُبنَ أي سؤال")
+    check_length_bias(bank)
 
 
 if __name__ == "__main__":
