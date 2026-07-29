@@ -213,13 +213,14 @@ class HomeScreen(Base):
     def __init__(self, app, **kw):
         super().__init__(app, "تطبيق الاختبارات الذكي", name="home", **kw)
 
-        self.summary = L("", size="16sp", color=(0.65, 0.72, 0.85, 1),
-                         size_hint_y=None, height=dp(56))
+        self.summary = L("", size="15sp", color=(0.65, 0.72, 0.85, 1),
+                         size_hint_y=None, height=dp(64))
         self.body.add_widget(self.summary)
 
         menu = column(10)
         entries = [
             ("بدء اختبار جديد", SUCCESS, lambda *_: self.app.go("pick")),
+            ("مراجعة أخطائي", (0.85, 0.42, 0.15, 1), lambda *_: self.app.start_review()),
             ("إدارة الأسئلة", PRIMARY, lambda *_: self.app.go("manage")),
             ("إضافة سؤال", WARN, lambda *_: self.app.go_edit(None)),
             ("الإعدادات", MUTED, lambda *_: self.app.go("settings")),
@@ -239,6 +240,8 @@ class HomeScreen(Base):
         line = "%d سؤال في %d فئة" % (count, len(categories))
         if history:
             line += "   |   أفضل نتيجة: %d%%   |   %d محاولة" % (round(best * 100), len(history))
+        pending = len(data.load_review())
+        line += "\nقائمة المراجعة: %s" % ("فارغة" if not pending else "%d سؤال" % pending)
         self.summary.set(line)
 
 
@@ -723,26 +726,43 @@ class QuizScreen(Base):
 class ResultScreen(Base):
     def __init__(self, app, **kw):
         super().__init__(app, "النتيجة", back_to="home", name="result", **kw)
-        self.headline = L("", size="22sp", halign="center", size_hint_y=None, height=dp(110))
+        self.headline = L("", size="19sp", halign="center", size_hint_y=None, height=dp(152))
         self.body.add_widget(self.headline)
         self.review_box = column(8)
         self.body.add_widget(scroller(self.review_box))
         row = BoxLayout(size_hint_y=None, height=dp(52), spacing=dp(8))
-        retry = B("إعادة الاختبار", bg=SUCCESS, size="16sp")
-        retry.bind(on_press=lambda *_: self.app.start_quiz())
+        self.retry = B("إعادة الاختبار", bg=SUCCESS, size="16sp")
+        self.retry.bind(on_press=self._again)
         home = B("القائمة الرئيسية", bg=MUTED, size="16sp")
         home.bind(on_press=lambda *_: self.app.go("home"))
-        row.add_widget(retry)
+        row.add_widget(self.retry)
         row.add_widget(home)
         self.body.add_widget(row)
+        self._was_review = False
 
-    def show(self, questions, answers, score, elapsed):
+    def _again(self, *_):
+        if self._was_review:
+            self.app.start_review()
+        else:
+            self.app.start_quiz()
+
+    def show(self, questions, answers, score, elapsed, review=False, mastered=0):
+        self._was_review = review
+        self.retry.set("مراجعة ما تبقّى" if review else "إعادة الاختبار")
+        self.title_label.set("نتيجة المراجعة" if review else "النتيجة")
         total = max(len(questions), 1)
         pct = round(score * 100.0 / total)
         grade = "ممتاز" if pct >= 85 else "جيد جداً" if pct >= 70 else "جيد" if pct >= 50 else "يحتاج مراجعة"
         minutes, secs = divmod(int(elapsed), 60)
-        self.headline.set("نتيجتك: %d من %d\nالنسبة: %d%%   —   %s\nالزمن المستغرق: %02d:%02d"
-                          % (score, total, pct, grade, minutes, secs))
+        lines = ["نتيجتك: %d من %d" % (score, total),
+                 "النسبة: %d%%   —   %s" % (pct, grade),
+                 "الزمن المستغرق: %02d:%02d" % (minutes, secs)]
+        remaining = len(data.load_review())
+        if mastered:
+            lines.append("أُتقن %d سؤال وحُذف من المراجعة" % mastered)
+        if remaining:
+            lines.append("بقي %d سؤال في قائمة المراجعة" % remaining)
+        self.headline.set("\n".join(lines))
         self.headline.color = SUCCESS if pct >= 50 else DANGER
 
         self.review_box.clear_widgets()
@@ -838,11 +858,23 @@ class HistoryScreen(Base):
         super().__init__(app, "سجل النتائج", back_to="home", name="history", **kw)
         self.list_box = column(6)
         self.body.add_widget(scroller(self.list_box))
-        clear = B("مسح السجل", bg=DANGER, size="16sp", height=dp(50))
+        row = BoxLayout(size_hint_y=None, height=dp(50), spacing=dp(8))
+        self.toggle_btn = B("أداء الفئات", bg=PRIMARY, size="15sp", height=dp(50))
+        self.toggle_btn.bind(on_press=self.toggle_view)
+        clear = B("مسح السجل", bg=DANGER, size="15sp", height=dp(50))
         clear.bind(on_press=lambda *_: confirm("مسح كل سجل النتائج؟", self.wipe, "مسح"))
-        self.body.add_widget(clear)
+        row.add_widget(self.toggle_btn)
+        row.add_widget(clear)
+        self.body.add_widget(row)
+        self.show_stats = False
 
     def on_pre_enter(self, *_):
+        self.refresh()
+
+    def toggle_view(self, *_):
+        self.show_stats = not self.show_stats
+        self.toggle_btn.set("كل المحاولات" if self.show_stats else "أداء الفئات")
+        self.title_label.set("أداء الفئات" if self.show_stats else "سجل النتائج")
         self.refresh()
 
     def refresh(self):
@@ -851,6 +883,9 @@ class HistoryScreen(Base):
         if not history:
             self.list_box.add_widget(L("لا توجد محاولات سابقة.", size="16sp",
                                        size_hint_y=None, height=dp(50)))
+            return
+        if self.show_stats:
+            self.render_stats(history)
             return
         for item in history:
             pct = round(item["score"] * 100.0 / max(item["total"], 1))
@@ -864,6 +899,20 @@ class HistoryScreen(Base):
                     size="14sp", size_hint_y=None, height=dp(40),
                     color=SUCCESS if pct >= 50 else DANGER)
             self.list_box.add_widget(row)
+
+    def render_stats(self, history):
+        """أداء المستخدم في كل فئة، من الأضعف إلى الأقوى."""
+        rows = data.category_stats(history)
+        self.list_box.add_widget(L("مرتّبة من الأضعف إلى الأقوى:", size="14sp",
+                                   color=(0.65, 0.72, 0.85, 1),
+                                   size_hint_y=None, height=dp(30)))
+        for _key, title, got, had, pct in rows:
+            filled = max(1, round(pct / 10))
+            bar = "•" * filled + "·" * (10 - filled)
+            color = SUCCESS if pct >= 70 else WARN if pct >= 50 else DANGER
+            self.list_box.add_widget(
+                L("%s   %s   %d%%   (%d/%d)" % (title, bar, pct, got, had),
+                  size="14sp", size_hint_y=None, height=dp(38), color=color))
 
     def wipe(self):
         data.clear_history()
@@ -879,6 +928,7 @@ class SmartQuizApp(App):
         self.settings = data.load_settings()
 
         self.questions = []
+        self.review_mode = False
         self.answers = {}
         self.revealed = set()
         self.index = 0
@@ -929,12 +979,26 @@ class SmartQuizApp(App):
         data.save_settings(self.settings)
 
     # ------------------------------------------------------------- الاختبار
-    def start_quiz(self):
-        if not self.bank:
+    def start_review(self):
+        """اختبار مبني على الأسئلة التي سبق أن أخطأ فيها المستخدم."""
+        pool = data.load_review()
+        if not pool:
+            toast("لا توجد أخطاء محفوظة. اخض اختباراً أولاً.", "المراجعة")
+            return
+        self.start_quiz(pool=pool, review=True)
+
+    def start_quiz(self, pool=None, review=False):
+        if not self.bank and pool is None:
             toast("لا توجد أسئلة. أضف أسئلة أولاً من «إدارة الأسئلة».")
             self.go("manage")
             return
-        self.questions = data.build_quiz(self.bank, self.settings)
+        self.review_mode = review
+        if pool is None:
+            self.questions = data.build_quiz(self.bank, self.settings)
+        else:
+            self.questions = data.build_quiz(
+                pool, dict(self.settings, category="", level=0,
+                           question_limit=min(len(pool), 20)))
         if not self.questions:
             toast("لا توجد أسئلة مطابقة للفئة والمستوى المختارين.")
             self.go("pick")
@@ -944,9 +1008,12 @@ class SmartQuizApp(App):
         self.index = 0
         self.remaining = self.settings["minutes"] * 60
         self.started_at = time.time()
-        title = data.CATEGORY_TITLES.get(self.settings["category"], "كل الفئات")
-        level = data.LEVEL_TITLES.get(self.settings["level"])
-        self.screens["quiz"].title_label.set(title + (" · " + level if level else ""))
+        if review:
+            self.screens["quiz"].title_label.set("مراجعة الأخطاء")
+        else:
+            title = data.CATEGORY_TITLES.get(self.settings["category"], "كل الفئات")
+            level = data.LEVEL_TITLES.get(self.settings["level"])
+            self.screens["quiz"].title_label.set(title + (" · " + level if level else ""))
         self.render()
         self.go("quiz")
         self.start_timer()
@@ -1000,10 +1067,15 @@ class SmartQuizApp(App):
         score = sum(1 for i, q in enumerate(self.questions)
                     if self.answers.get(i) == q["answer"])
         elapsed = time.time() - self.started_at
+        mastered = 0
         if self.questions:
-            data.add_history(score, len(self.questions), elapsed,
-                             self.settings.get("category", ""), self.settings.get("level", 0))
-        self.screens["result"].show(self.questions, self.answers, score, elapsed)
+            if not self.review_mode:
+                data.add_history(score, len(self.questions), elapsed,
+                                 self.settings.get("category", ""),
+                                 self.settings.get("level", 0))
+            _added, mastered = data.record_mistakes(self.questions, self.answers)
+        self.screens["result"].show(self.questions, self.answers, score, elapsed,
+                                    review=self.review_mode, mastered=mastered)
         self.go("result")
 
     def on_pause(self):

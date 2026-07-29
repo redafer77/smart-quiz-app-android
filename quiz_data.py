@@ -9,6 +9,7 @@ BANK_FILE = "questions.json"
 LEGACY_FILE = "questions.txt"
 SETTINGS_FILE = "settings.json"
 HISTORY_FILE = "history.json"
+REVIEW_FILE = "review.json"
 
 LETTERS = ["أ", "ب", "ج", "د", "هـ", "و"]
 
@@ -348,6 +349,74 @@ def add_history(score, total, seconds, category="", level=0):
 
 def clear_history():
     _write_json(HISTORY_FILE, [])
+
+
+def category_stats(history=None):
+    """أداء المستخدم في كل فئة: (المفتاح، العنوان، الصحيح، الإجمالي، النسبة).
+
+    مرتّبة من الأضعف إلى الأقوى ليظهر ما يحتاج مراجعة أولاً.
+    """
+    totals = {}
+    for entry in history if history is not None else load_history():
+        key = entry.get("category") or ""
+        score, total = int(entry.get("score", 0)), int(entry.get("total", 0))
+        if total <= 0:
+            continue
+        got, had = totals.get(key, (0, 0))
+        totals[key] = (got + score, had + total)
+
+    rows = []
+    for key, (got, had) in totals.items():
+        title = CATEGORY_TITLES.get(key, "كل الفئات" if not key else key)
+        rows.append((key, title, got, had, round(got * 100.0 / had)))
+    rows.sort(key=lambda r: (r[4], -r[3]))
+    return rows
+
+
+# ------------------------------------------------------------- مراجعة الأخطاء
+
+def load_review():
+    """الأسئلة التي أخطأ فيها المستخدم ولم يتقنها بعد."""
+    items = _read_json(REVIEW_FILE, [])
+    return _normalize(items) if isinstance(items, list) else []
+
+
+def _question_key(question):
+    return question.get("question", "").strip()
+
+
+def record_mistakes(questions, answers):
+    """يضيف الأسئلة الخاطئة إلى قائمة المراجعة ويحذف ما أُتقن.
+
+    يعيد (عدد المضاف، عدد المحذوف).
+    """
+    review = load_review()
+    index = {_question_key(q): i for i, q in enumerate(review)}
+    added = removed = 0
+
+    for position, question in enumerate(questions):
+        key = _question_key(question)
+        if not key:
+            continue
+        correct = answers.get(position) == question["answer"]
+        if correct:
+            if key in index:
+                review[index[key]] = None
+                del index[key]
+                removed += 1
+        elif key not in index:
+            entry = dict(question, options=list(question["options"]))
+            index[key] = len(review)
+            review.append(entry)
+            added += 1
+
+    review = [q for q in review if q]
+    _write_json(REVIEW_FILE, review)
+    return added, removed
+
+
+def clear_review():
+    _write_json(REVIEW_FILE, [])
 
 
 # ------------------------------------------------------------------ الاختبار

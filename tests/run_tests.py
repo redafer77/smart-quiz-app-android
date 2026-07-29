@@ -182,6 +182,49 @@ def test_categories():
     check("المستوى الافتراضي 1", custom[0]["level"] == 1)
 
 
+def test_review():
+    section("مراجعة الأخطاء وإحصاءات الفئات")
+    import quiz_data as data
+
+    data.clear_review()
+    qs = [
+        {"question": "س1", "options": ["أ", "ب"], "answer": 0, "category": "math", "level": 1},
+        {"question": "س2", "options": ["أ", "ب"], "answer": 1, "category": "math", "level": 1},
+        {"question": "س3", "options": ["أ", "ب"], "answer": 0, "category": "islam", "level": 1},
+    ]
+    added, removed = data.record_mistakes(qs, {0: 1, 1: 1, 2: 0})
+    check("الخاطئ يُحفظ فقط", (added, removed) == (1, 0), (added, removed))
+    check("محتوى قائمة المراجعة",
+          [q["question"] for q in data.load_review()] == ["س1"])
+
+    added, removed = data.record_mistakes(qs, {0: 1, 1: 0, 2: 1})
+    check("الخاطئ الجديد يُضاف", added == 2, added)
+    check("لا تكرار في القائمة",
+          len({q["question"] for q in data.load_review()}) == len(data.load_review()))
+
+    data.record_mistakes(qs, {0: 0, 1: 1, 2: 0})
+    check("المتقَن يُحذف", data.load_review() == [], data.load_review())
+
+    data.record_mistakes(qs, {})
+    check("عدم الإجابة يُعد خطأ", len(data.load_review()) == 3)
+    check("سؤال المراجعة يحتفظ بخياراته",
+          all(len(q["options"]) == 2 for q in data.load_review()))
+    data.clear_review()
+    check("مسح المراجعة", data.load_review() == [])
+
+    hist = [
+        {"category": "math", "score": 2, "total": 10},
+        {"category": "math", "score": 8, "total": 10},
+        {"category": "islam", "score": 9, "total": 10},
+        {"category": "islam", "score": 0, "total": 0},
+    ]
+    rows = data.category_stats(hist)
+    check("تجميع الفئات", len(rows) == 2, rows)
+    check("الأضعف أولاً", rows[0][0] == "math" and rows[0][4] == 50, rows)
+    check("تجاهل المحاولات الفارغة", rows[1][3] == 10, rows)
+    check("سجل فارغ", data.category_stats([]) == [])
+
+
 def test_font_coverage():
     """كل محرف يعرضه التطبيق يجب أن يكون له رسم في الخط، وإلا ظهر مربّعاً فارغاً."""
     section("تغطية الخط")
@@ -381,6 +424,49 @@ def test_app():
     check("زر الرجوع يعود للرئيسية", app.on_key(None, 27) and app.sm.current == "home")
     check("زر الرجوع يخرج من الرئيسية", app.on_key(None, 27) is False)
 
+    # وضع المراجعة
+    data.clear_review()
+    app.settings.update(question_limit=4, instant_feedback=True,
+                        shuffle_questions=False, shuffle_options=False,
+                        category="", level=0)
+    app.start_quiz()
+    for i, q in enumerate(app.questions):          # كلها خاطئة عمداً
+        app.choose((q["answer"] + 1) % len(q["options"]))
+        if i < len(app.questions) - 1:
+            app.move(1)
+    app.finish_quiz()
+    pool = data.load_review()
+    check("الأخطاء تدخل قائمة المراجعة", len(pool) == 4, len(pool))
+
+    hist_before = len(data.load_history())
+    app.start_review()
+    check("وضع المراجعة يعمل", app.review_mode and app.sm.current == "quiz")
+    check("أسئلة المراجعة من القائمة",
+          {q["question"] for q in app.questions} == {q["question"] for q in pool})
+    for i, q in enumerate(app.questions):          # كلها صحيحة الآن
+        app.choose(q["answer"])
+        if i < len(app.questions) - 1:
+            app.move(1)
+    app.finish_quiz()
+    check("المراجعة تفرّغ القائمة عند الإتقان", data.load_review() == [],
+          data.load_review())
+    check("المراجعة لا تُسجَّل في سجل النتائج",
+          len(data.load_history()) == hist_before, len(data.load_history()))
+    check("زر الإعادة يعرف أنه مراجعة", app.screens["result"]._was_review)
+
+    app.review_mode = False
+    app.start_review()
+    check("مراجعة فارغة لا تبدأ اختباراً", app.sm.current == "result")
+
+    # عرض إحصاءات الفئات
+    hs = app.screens["history"]
+    hs.on_pre_enter()
+    hs.toggle_view()
+    check("تبديل عرض أداء الفئات", hs.show_stats)
+    hs.refresh()
+    hs.toggle_view()
+    check("العودة لعرض المحاولات", not hs.show_stats)
+
     # بنك فارغ
     app.bank = []
     app.save_bank()
@@ -394,6 +480,7 @@ def main_():
         test_wrap()
         test_data()
         test_categories()
+        test_review()
         test_font_coverage()
         test_app()
     finally:

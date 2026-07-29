@@ -9,6 +9,7 @@ __pycache__/
 /questions.json
 /settings.json
 /history.json
+/review.json
 /questions_export.txt
 /questions.txt
 .venv/
