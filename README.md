@@ -144,6 +144,12 @@ base64 -w0 release.keystore     # انسخ الناتج
 ثم أضف في **Settings → Secrets and variables → Actions** الأسرار الأربعة:
 `ANDROID_KEYSTORE_BASE64` و`ANDROID_KEYSTORE_PASSWORD` و`ANDROID_KEY_ALIAS` و`ANDROID_KEY_PASSWORD`.
 عند وجودها يُنتج سير العمل نسخة `-signed.apk` إضافية ويرفعها مع الإصدار؛ وبدونها يتخطّى الخطوة بلا فشل.
+هذه النسخة كافية للتوزيع الذاتي والتحديث فوق التثبيت السابق، لكنها تبقى بناء debug
+يحمل `android:debuggable="true"` فيرفضه Google Play.
+
+للحصول على نسخة صالحة للمتاجر شغّل يدوياً سير العمل **Signed Release APK** من تبويب
+Actions؛ يستخدم نفس الأسرار الأربعة لكنه يبني `buildozer android release` من الأساس.
+أُبقي منفصلاً ويدوياً لأنه بناء كامل إضافي (~13 دقيقة) ولئلا يؤثر على المسار المعتاد.
 
 ## صيغة ملف الأسئلة النصي
 
