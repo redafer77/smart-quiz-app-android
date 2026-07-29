@@ -42,6 +42,7 @@
 | `tools/build_bank.py` | يبني `questions.json` من المصدر ويتحقق من صحّته |
 | `tests/run_tests.py` | اختبارات تعمل بلا Kivy عبر بدائل خفيفة |
 | `tests/font_coverage.py` | قارئ `cmap` يتحقق أن كل محرف معروض له رسم في الخط |
+| `tests/bank_quality.py` | يرفض الأسئلة التي تفضح جوابها والأجوبة الحسابية الخاطئة |
 | `.github/workflows/build.yml` | الاختبارات ثم بناء APK ونشر الإصدار |
 | `.github/workflows/release-signed.yml` | بناء يدوي لنسخة release موقّعة للمتاجر |
 
@@ -121,7 +122,7 @@ buildozer android debug
 </div>
 
 ```bash
-git tag v1.3 && git push origin v1.3
+git tag v1.4 && git push origin v1.4
 ```
 
 <div dir="rtl">

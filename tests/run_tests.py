@@ -182,6 +182,36 @@ def test_categories():
     check("المستوى الافتراضي 1", custom[0]["level"] == 1)
 
 
+def test_bank_quality():
+    section("جودة بنك الأسئلة")
+    import json
+    import bank_quality as bq
+
+    with open(os.path.join(ROOT, "data", "questions.json"), encoding="utf-8") as fh:
+        bank = json.load(fh)
+
+    leaks = bq.revealing_questions(bank)
+    check("لا سؤال يفضح جوابه في نصّه", not leaks,
+          leaks[:3] if leaks else None)
+
+    wrong = bq.wrong_arithmetic(bank)
+    check("كل جواب حسابي يطابق الحساب الفعلي", not wrong,
+          wrong[:3] if wrong else None)
+    covered = bq.arithmetic_count(bank)
+    check("المتحقّق الحسابي يغطي أسئلة فعلية", covered >= 40, covered)
+
+    # الكاشف نفسه يجب أن يعمل: سؤال مفضوح مصنوع يدوياً
+    trap = [{"question": "ما اسم مدينة القاهرة الكبرى؟",
+             "options": ["القاهرة", "دمشق", "بغداد", "تونس"], "answer": 0}]
+    check("الكاشف يمسك سؤالاً مفضوحاً", len(bq.revealing_questions(trap)) == 1)
+    bad_math = [{"question": "كم يساوي 2 + 2؟",
+                 "options": ["5", "4", "3", "6"], "answer": 0}]
+    check("الكاشف يمسك حساباً خاطئاً", len(bq.wrong_arithmetic(bad_math)) == 1)
+    good_math = [{"question": "كم يساوي 2 + 2؟",
+                  "options": ["5", "4", "3", "6"], "answer": 1}]
+    check("الكاشف لا يشكو من حساب صحيح", not bq.wrong_arithmetic(good_math))
+
+
 def test_review():
     section("مراجعة الأخطاء وإحصاءات الفئات")
     import quiz_data as data
@@ -480,6 +510,7 @@ def main_():
         test_wrap()
         test_data()
         test_categories()
+        test_bank_quality()
         test_review()
         test_font_coverage()
         test_app()

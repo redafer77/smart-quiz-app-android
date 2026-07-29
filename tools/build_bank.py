@@ -165,17 +165,14 @@ def main():
         bank.extend(items)
         report.append((title, len(items), counts))
 
-    with open(OUTPUT, "w", encoding="utf-8") as handle:
-        json.dump(bank, handle, ensure_ascii=False, indent=0, separators=(",", ":"))
-
     print("الفئة                عدد   توزيع المستويات")
     for title, total, counts in report:
         spread = " ".join("م%d:%d" % (lvl, counts.get(lvl, 0)) for lvl in (1, 2, 3, 4))
         print("%-18s %5d   %s" % (title, total, spread))
     print("-" * 46)
     print("المجموع: %d سؤال في %s" % (len(bank), os.path.relpath(OUTPUT, ROOT)))
-    size = os.path.getsize(OUTPUT) / 1024.0
-    print("حجم الملف: %.1f كيلوبايت" % size)
+    payload = json.dumps(bank, ensure_ascii=False, indent=0, separators=(",", ":"))
+    print("حجم الملف: %.1f كيلوبايت" % (len(payload.encode("utf-8")) / 1024.0))
     spread = {}
     for item in bank:
         spread[item["answer"]] = spread.get(item["answer"], 0) + 1
@@ -186,6 +183,34 @@ def main():
     if not bank:
         fail("لم يُبنَ أي سؤال")
     check_length_bias(bank)
+    check_quality(bank)
+
+    # لا تُكتب المخرجات إلا بعد نجاح كل الفحوص
+    with open(OUTPUT, "w", encoding="utf-8") as handle:
+        handle.write(payload)
+    print("كُتب %s" % os.path.relpath(OUTPUT, ROOT))
+
+
+def check_quality(bank):
+    """يرفض البناء إن كان سؤال يفضح جوابه أو جواب حسابي خاطئ."""
+    sys.path.insert(0, os.path.join(ROOT, "tests"))
+    try:
+        import bank_quality
+    except ImportError:
+        print("تنبيه: تعذّر تحميل فحوص الجودة، تم تخطّيها")
+        return
+
+    wrong = bank_quality.wrong_arithmetic(bank)
+    for question, stored, computed in wrong:
+        print("جواب حسابي خاطئ: %s | المخزَّن %s | الصحيح %s"
+              % (question, stored, computed))
+    leaks = bank_quality.revealing_questions(bank)
+    for category, question, answer in leaks:
+        print("سؤال يفضح جوابه [%s]: %s ← %s" % (category, question, answer))
+    if wrong or leaks:
+        fail("فحص الجودة رفض %d سؤالاً" % (len(wrong) + len(leaks)))
+    print("فحص الجودة: %d سؤال حسابي مُتحقَّق، ولا سؤال يفضح جوابه"
+          % bank_quality.arithmetic_count(bank))
 
 
 if __name__ == "__main__":
