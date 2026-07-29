@@ -6,9 +6,9 @@ package.domain = org.quizapp
 source.dir = .
 source.include_exts = py,png,jpg,kv,atlas,txt,ttf,json
 source.include_patterns = fonts/*.ttf,data/*.json,assets/*.png
-source.exclude_dirs = tests,bin,.buildozer,.github,.git
+source.exclude_dirs = tests,bin,.buildozer,.github,.git,tools,data/source
 
-version = 1.1
+version = 1.2
 
 # لا حاجة لأي حزمة خارجية لدعم العربية: التشكيل والـ RTL مكتوبان في arabic_support.py
 requirements = python3,kivy,cython==3.0.11

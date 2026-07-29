@@ -18,10 +18,26 @@ from kivy.uix.screenmanager import NoTransition, Screen, ScreenManager
 from kivy.uix.switch import Switch
 from kivy.uix.textinput import TextInput
 
+from kivy.core.text import Label as CoreLabel
+
 import quiz_data as data
 from arabic_support import ar, register_font
+from arabic_support import wrap as ar_wrap
 
 FONT = register_font()
+
+_MEASURERS = {}
+
+
+def _measurer(font_size, font_name):
+    """دالة قياس عرض النص بالبكسل، مع تخزين مؤقت لكل (حجم، خط)."""
+    key = (round(float(font_size)), font_name)
+    fn = _MEASURERS.get(key)
+    if fn is None:
+        core = CoreLabel(font_size=float(font_size), font_name=font_name)
+        fn = lambda text: core.get_extents(text)[0]
+        _MEASURERS[key] = fn
+    return fn
 
 BG = (0.09, 0.11, 0.16, 1)
 CARD = (0.15, 0.18, 0.25, 1)
@@ -42,20 +58,34 @@ def _font_kwargs(**kw):
 
 
 class L(Label):
-    """عنوان عربي جاهز للعرض."""
+    """عنوان عربي جاهز للعرض، يلفّ الأسطر منطقياً قبل التحويل البصري."""
 
     def __init__(self, text="", size="16sp", color=TEXT, **kw):
         kw.setdefault("halign", "right")
         kw.setdefault("valign", "middle")
         kw.setdefault("markup", False)
+        self.raw = text
         super().__init__(text=ar(text), font_size=size, color=color, **_font_kwargs(**kw))
         self.bind(size=self._sync)
 
     def _sync(self, *_):
         self.text_size = self.size
+        self._apply()
+
+    def _apply(self):
+        rendered = ar(self.raw)
+        if self.width > 1:
+            try:
+                rendered = ar_wrap(self.raw, self.width - dp(4),
+                                   _measurer(self.font_size, self.font_name))
+            except Exception:
+                pass
+        if rendered != self.text:
+            self.text = rendered
 
     def set(self, text):
-        self.text = ar(text)
+        self.raw = text
+        self._apply()
 
 
 class B(Button):
@@ -189,9 +219,9 @@ class HomeScreen(Base):
 
         menu = column(10)
         entries = [
-            ("بدء اختبار جديد", SUCCESS, lambda *_: self.app.start_quiz()),
+            ("بدء اختبار جديد", SUCCESS, lambda *_: self.app.go("pick")),
             ("إدارة الأسئلة", PRIMARY, lambda *_: self.app.go("manage")),
-            ("إضافة سؤال", WARN, lambda *_: self.app.go("edit")),
+            ("إضافة سؤال", WARN, lambda *_: self.app.go_edit(None)),
             ("الإعدادات", MUTED, lambda *_: self.app.go("settings")),
             ("سجل النتائج", (0.45, 0.30, 0.70, 1), lambda *_: self.app.go("history")),
         ]
@@ -203,12 +233,93 @@ class HomeScreen(Base):
 
     def on_pre_enter(self, *_):
         count = len(self.app.bank)
+        categories = data.available_categories(self.app.bank)
         history = data.load_history()
         best = max((h["score"] / max(h["total"], 1) for h in history), default=0)
-        line = "عدد الأسئلة المخزّنة: %d" % count
+        line = "%d سؤال في %d فئة" % (count, len(categories))
         if history:
-            line += "\nأفضل نتيجة: %d%%   |   عدد المحاولات: %d" % (round(best * 100), len(history))
+            line += "   |   أفضل نتيجة: %d%%   |   %d محاولة" % (round(best * 100), len(history))
         self.summary.set(line)
+
+
+# --------------------------------------------------------- اختيار الفئة والمستوى
+
+class PickScreen(Base):
+    """اختيار الفئة والمستوى وعدد الأسئلة قبل بدء الاختبار."""
+
+    def __init__(self, app, **kw):
+        super().__init__(app, "اختر الاختبار", back_to="home", name="pick", **kw)
+        self.body_box = column(8)
+        self.body.add_widget(scroller(self.body_box))
+        self.info = L("", size="15sp", color=(0.65, 0.72, 0.85, 1),
+                      size_hint_y=None, height=dp(30), halign="center")
+        self.body.add_widget(self.info)
+        self.start_btn = B("بدء الاختبار", bg=SUCCESS, size="18sp", height=dp(56))
+        self.start_btn.bind(on_press=lambda *_: self.app.start_quiz())
+        self.body.add_widget(self.start_btn)
+
+    def on_pre_enter(self, *_):
+        self.refresh()
+
+    def _chips(self, title, options, current, on_pick):
+        """صف عناوين + أزرار اختيار مصفوفة في عمودين."""
+        self.body_box.add_widget(L(title, size="16sp", color=(0.55, 0.78, 1, 1),
+                                   size_hint_y=None, height=dp(30)))
+        row = None
+        for index, (value, label) in enumerate(options):
+            if index % 2 == 0:
+                row = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(8))
+                self.body_box.add_widget(row)
+            btn = B(label, bg=PRIMARY if value == current else (0.22, 0.26, 0.34, 1),
+                    size="15sp", height=dp(46))
+            btn.bind(on_press=lambda _w, v=value: on_pick(v))
+            row.add_widget(btn)
+        if row is not None and len(row.children) == 1:
+            row.add_widget(BoxLayout())
+
+    def refresh(self):
+        self.body_box.clear_widgets()
+        settings = self.app.settings
+        bank = self.app.bank
+
+        categories = [("", "كل الفئات")]
+        categories += [(key, "%s (%d)" % (title, count))
+                       for key, title, count in data.available_categories(bank)]
+        self._chips("الفئة", categories, settings["category"], self._pick_category)
+
+        levels = [(0, "كل المستويات")]
+        levels += [(lvl, "%s (%d)" % (title, count))
+                   for lvl, title, count in data.available_levels(bank, settings["category"])]
+        self._chips("المستوى", levels, settings["level"], self._pick_level)
+
+        counts = [(0, "الكل"), (5, "5"), (10, "10"), (20, "20"), (30, "30"), (50, "50")]
+        self._chips("عدد الأسئلة", counts, settings["question_limit"], self._pick_limit)
+
+        pool = data.filter_bank(bank, settings["category"], settings["level"])
+        limit = settings["question_limit"]
+        total = min(limit, len(pool)) if limit else len(pool)
+        self.info.set("المتاح: %d سؤال   —   سيبدأ الاختبار بـ %d سؤال في %d دقيقة"
+                      % (len(pool), total, settings["minutes"]))
+        self.start_btn.disabled = total == 0
+        self.start_btn.tint(SUCCESS if total else MUTED)
+
+    def _pick_category(self, value):
+        self.app.settings["category"] = value
+        if value and self.app.settings["level"] not in [
+                lvl for lvl, _, _ in data.available_levels(self.app.bank, value)]:
+            self.app.settings["level"] = 0
+        self.app.save_settings()
+        self.refresh()
+
+    def _pick_level(self, value):
+        self.app.settings["level"] = value
+        self.app.save_settings()
+        self.refresh()
+
+    def _pick_limit(self, value):
+        self.app.settings["question_limit"] = value
+        self.app.save_settings()
+        self.refresh()
 
 
 # --------------------------------------------------------------- إدارة الأسئلة
@@ -216,36 +327,102 @@ class HomeScreen(Base):
 class ManageScreen(Base):
     def __init__(self, app, **kw):
         super().__init__(app, "إدارة الأسئلة", back_to="home", name="manage", **kw)
+        self.filter_category = ""
+        self.page = 0
+        self.page_size = 20
+
+        filter_row = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(8))
+        self.filter_btn = B("", bg=(0.22, 0.26, 0.34, 1), size="15sp", height=dp(44))
+        self.filter_btn.bind(on_press=self.cycle_filter)
+        filter_row.add_widget(self.filter_btn)
+        self.body.add_widget(filter_row)
+
         self.list_box = column(8)
         self.body.add_widget(scroller(self.list_box))
 
-        row = BoxLayout(size_hint_y=None, height=dp(50), spacing=dp(8))
-        add = B("إضافة سؤال", bg=SUCCESS, size="16sp", height=dp(50))
-        add.bind(on_press=lambda *_: self.app.go("edit"))
-        exp = B("تصدير نصي", bg=PRIMARY, size="16sp", height=dp(50))
+        pager = BoxLayout(size_hint_y=None, height=dp(42), spacing=dp(8))
+        self.prev_page = B("السابق", bg=MUTED, size="14sp", height=dp(42))
+        self.prev_page.bind(on_press=lambda *_: self.turn(-1))
+        self.page_label = L("", size="14sp", halign="center")
+        self.next_page = B("التالي", bg=MUTED, size="14sp", height=dp(42))
+        self.next_page.bind(on_press=lambda *_: self.turn(1))
+        for w in (self.prev_page, self.page_label, self.next_page):
+            pager.add_widget(w)
+        self.body.add_widget(pager)
+
+        row1 = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(8))
+        add = B("إضافة سؤال", bg=SUCCESS, size="15sp", height=dp(48))
+        add.bind(on_press=lambda *_: self.app.go_edit(None))
+        exp = B("تصدير نصي", bg=PRIMARY, size="15sp", height=dp(48))
         exp.bind(on_press=self.export_text)
-        clear = B("حذف الكل", bg=DANGER, size="16sp", height=dp(50))
+        imp = B("استيراد", bg=(0.45, 0.30, 0.70, 1), size="15sp", height=dp(48))
+        imp.bind(on_press=self.import_text)
+        for w in (add, exp, imp):
+            row1.add_widget(w)
+        self.body.add_widget(row1)
+
+        row2 = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(8))
+        restore = B("استعادة الأسئلة الافتراضية", bg=WARN, size="15sp", height=dp(48))
+        restore.bind(on_press=self.restore_defaults)
+        clear = B("حذف الكل", bg=DANGER, size="15sp", height=dp(48))
         clear.bind(on_press=self.clear_all)
-        for w in (add, exp, clear):
-            row.add_widget(w)
-        self.body.add_widget(row)
+        row2.add_widget(restore)
+        row2.add_widget(clear)
+        self.body.add_widget(row2)
 
     def on_pre_enter(self, *_):
         self.refresh()
 
+    def _filters(self):
+        options = [("", "كل الفئات")]
+        options += [(key, title) for key, title, _ in data.available_categories(self.app.bank)]
+        return options
+
+    def cycle_filter(self, *_):
+        options = self._filters()
+        keys = [key for key, _ in options]
+        try:
+            index = keys.index(self.filter_category)
+        except ValueError:
+            index = 0
+        self.filter_category = keys[(index + 1) % len(keys)]
+        self.page = 0
+        self.refresh()
+
+    def turn(self, step):
+        self.page += step
+        self.refresh()
+
     def refresh(self):
         self.list_box.clear_widgets()
-        if not self.app.bank:
-            self.list_box.add_widget(L("لا توجد أسئلة بعد. أضف سؤالك الأول.",
+        titles = dict(self._filters())
+        visible = [(i, q) for i, q in enumerate(self.app.bank)
+                   if not self.filter_category or q["category"] == self.filter_category]
+        self.filter_btn.set("الفئة: %s  (%d سؤال) — اضغط للتبديل"
+                            % (titles.get(self.filter_category, "كل الفئات"), len(visible)))
+
+        pages = max(1, (len(visible) + self.page_size - 1) // self.page_size)
+        self.page = max(0, min(self.page, pages - 1))
+        self.page_label.set("صفحة %d من %d" % (self.page + 1, pages))
+        self.prev_page.disabled = self.page == 0
+        self.next_page.disabled = self.page >= pages - 1
+
+        if not visible:
+            self.list_box.add_widget(L("لا توجد أسئلة في هذه الفئة.",
                                        size="16sp", size_hint_y=None, height=dp(60)))
             return
-        for index, q in enumerate(self.app.bank):
+
+        start = self.page * self.page_size
+        for index, q in visible[start:start + self.page_size]:
             card = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(4),
                              padding=(dp(8), dp(6)))
-            label = L("%d. %s" % (index + 1, q["question"]), size="16sp",
-                      size_hint_y=None, height=dp(44))
-            correct = L("الإجابة: %s) %s" % (data.LETTERS[q["answer"]], q["options"][q["answer"]]),
-                        size="14sp", color=(0.45, 0.85, 0.6, 1), size_hint_y=None, height=dp(26))
+            label = L("%d. %s" % (index + 1, q["question"]), size="15sp",
+                      size_hint_y=None, height=dp(54))
+            meta = L("الإجابة: %s) %s   |   %s · %s"
+                     % (data.LETTERS[q["answer"]], q["options"][q["answer"]],
+                        data.CATEGORY_TITLES.get(q["category"], q["category"]),
+                        data.LEVEL_TITLES.get(q["level"], "")),
+                     size="13sp", color=(0.45, 0.85, 0.6, 1), size_hint_y=None, height=dp(26))
             actions = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(8))
             edit = B("تعديل", bg=PRIMARY, size="14sp", height=dp(40))
             edit.bind(on_press=lambda _w, i=index: self.app.go_edit(i))
@@ -254,9 +431,9 @@ class ManageScreen(Base):
             actions.add_widget(edit)
             actions.add_widget(remove)
             actions.add_widget(BoxLayout())
-            for w in (label, correct, actions):
+            for w in (label, meta, actions):
                 card.add_widget(w)
-            card.height = dp(118)
+            card.height = dp(128)
             self.list_box.add_widget(card)
 
     def delete(self, index):
@@ -275,17 +452,77 @@ class ManageScreen(Base):
 
         confirm("سيتم حذف كل الأسئلة نهائياً. متابعة؟", _do, "حذف الكل")
 
+    def restore_defaults(self, *_):
+        def _do():
+            self.app.bank, added = data.merge_bank(self.app.bank, data.default_bank())
+            self.app.save_bank()
+            self.refresh()
+            toast("تمت إضافة %d سؤال افتراضي." % added if added
+                  else "كل الأسئلة الافتراضية موجودة مسبقاً.", "تم")
+
+        confirm("إضافة الأسئلة الافتراضية إلى بنكك الحالي؟", _do, "استعادة")
+
     def export_text(self, *_):
         if not self.app.bank:
             toast("لا توجد أسئلة للتصدير.")
             return
-        path = os.path.join(data.storage_dir(), "questions_export.txt")
-        try:
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(data.to_text_bank(self.app.bank))
-            toast("تم التصدير إلى:\n%s" % path, "تم")
-        except Exception as exc:
-            toast("تعذّر التصدير: %s" % exc, "خطأ")
+        content = data.to_text_bank(self.app.bank)
+        written, errors = [], []
+        for path in data.export_targets():
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(content)
+                written.append(path)
+            except Exception as exc:
+                errors.append(str(exc))
+        if written:
+            toast("تم تصدير %d سؤال إلى:\n%s" % (len(self.app.bank), "\n".join(written)), "تم")
+        else:
+            toast("تعذّر التصدير: %s" % ("؛ ".join(errors) or "سبب غير معروف"), "خطأ")
+
+    def import_text(self, *_):
+        paths = data.import_candidates()
+        if not paths:
+            shared = data.shared_dir() or data.storage_dir()
+            toast("ضع ملف الأسئلة النصي باسم questions_import.txt في:\n%s\nثم أعد المحاولة."
+                  % shared, "الاستيراد")
+            return
+
+        box = BoxLayout(orientation="vertical", padding=dp(12), spacing=dp(8))
+        box.add_widget(L("اختر ملفاً للاستيراد:", size="16sp", size_hint_y=None, height=dp(30)))
+        listing = column(6)
+        popup_holder = {}
+
+        def _pick(path):
+            popup_holder["p"].dismiss()
+            try:
+                imported = data.import_from_file(path)
+            except Exception as exc:
+                toast("تعذّرت القراءة: %s" % exc, "خطأ")
+                return
+            if not imported:
+                toast("لم يُعثر على أسئلة بالصيغة الصحيحة في الملف.", "الاستيراد")
+                return
+            self.app.bank, added = data.merge_bank(self.app.bank, imported)
+            self.app.save_bank()
+            self.refresh()
+            toast("تمت إضافة %d سؤال من أصل %d في الملف." % (added, len(imported)), "تم")
+
+        for path in paths:
+            btn = B(os.path.basename(path), bg=PRIMARY, size="15sp", height=dp(46))
+            btn.bind(on_press=lambda _w, p=path: _pick(p))
+            listing.add_widget(btn)
+            listing.add_widget(L(path, size="12sp", color=(0.55, 0.62, 0.75, 1),
+                                 size_hint_y=None, height=dp(22)))
+        box.add_widget(scroller(listing))
+        cancel = B("إلغاء", bg=MUTED, size="15sp", height=dp(46))
+        box.add_widget(cancel)
+        popup = Popup(title=ar("استيراد أسئلة"), content=box, size_hint=(0.92, 0.6),
+                      title_align="right", separator_color=PRIMARY,
+                      title_font=FONT or "Roboto", title_size="17sp")
+        popup_holder["p"] = popup
+        cancel.bind(on_press=popup.dismiss)
+        popup.open()
 
 
 # ------------------------------------------------------------ إضافة/تعديل سؤال
@@ -316,6 +553,22 @@ class EditScreen(Base):
         form.add_widget(self.answer_row)
         self.answer = 0
 
+        self.category = data.CUSTOM_CATEGORY
+        self.category_btn = B("", bg=(0.22, 0.26, 0.34, 1), size="15sp", height=dp(46))
+        self.category_btn.bind(on_press=self.cycle_category)
+        form.add_widget(self.category_btn)
+
+        self.level = 1
+        form.add_widget(L("المستوى:", size="16sp", size_hint_y=None, height=dp(30)))
+        level_row = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(8))
+        self.level_buttons = []
+        for value, title in data.LEVELS:
+            btn = B(title, bg=MUTED, size="14sp", height=dp(46))
+            btn.bind(on_press=lambda _w, v=value: self.pick_level(v))
+            self.level_buttons.append((value, btn))
+            level_row.add_widget(btn)
+        form.add_widget(level_row)
+
         save = B("حفظ السؤال", bg=SUCCESS, size="18sp", height=dp(54))
         save.bind(on_press=self.save)
         form.add_widget(save)
@@ -329,6 +582,8 @@ class EditScreen(Base):
             for field in self.opt_fields:
                 field.value = ""
             self.pick_answer(0)
+            self.set_category(data.CUSTOM_CATEGORY)
+            self.pick_level(1)
             return
         q = self.app.bank[index]
         self.title_label.set("تعديل السؤال %d" % (index + 1))
@@ -336,11 +591,27 @@ class EditScreen(Base):
         for i, field in enumerate(self.opt_fields):
             field.value = q["options"][i] if i < len(q["options"]) else ""
         self.pick_answer(q["answer"])
+        self.set_category(q["category"])
+        self.pick_level(q["level"])
 
     def pick_answer(self, index):
         self.answer = index
         for i, btn in enumerate(self.answer_buttons):
             btn.tint(SUCCESS if i == index else MUTED)
+
+    def set_category(self, key):
+        self.category = key if key in data.CATEGORY_TITLES else data.CUSTOM_CATEGORY
+        self.category_btn.set("الفئة: %s — اضغط للتبديل"
+                              % data.CATEGORY_TITLES[self.category])
+
+    def cycle_category(self, *_):
+        keys = [key for key, _ in data.CATEGORIES] + [data.CUSTOM_CATEGORY]
+        self.set_category(keys[(keys.index(self.category) + 1) % len(keys)])
+
+    def pick_level(self, value):
+        self.level = value
+        for lvl, btn in self.level_buttons:
+            btn.tint(PRIMARY if lvl == value else MUTED)
 
     def save(self, *_):
         question = self.q_field.value
@@ -356,7 +627,8 @@ class EditScreen(Base):
             toast("الخيار المحدد كإجابة صحيحة فارغ.")
             return
         correct_text = options[self.answer]
-        entry = {"question": question, "options": filled, "answer": filled.index(correct_text)}
+        entry = {"question": question, "options": filled, "answer": filled.index(correct_text),
+                 "category": self.category, "level": self.level}
         if self.index is None:
             self.app.bank.append(entry)
         else:
@@ -382,7 +654,7 @@ class QuizScreen(Base):
         self.progress = ProgressBar(max=1, value=0, size_hint_y=None, height=dp(6))
         self.body.add_widget(self.progress)
 
-        self.question_label = L("", size="20sp", size_hint_y=None, height=dp(96))
+        self.question_label = L("", size="20sp", size_hint_y=None, height=dp(112))
         self.body.add_widget(self.question_label)
 
         self.options_box = column(8)
@@ -483,10 +755,10 @@ class ResultScreen(Base):
                                      color=WARN, size_hint_y=None, height=dp(36)))
         for i, q in wrong:
             chosen = answers.get(i)
-            card = BoxLayout(orientation="vertical", size_hint_y=None, height=dp(104),
+            card = BoxLayout(orientation="vertical", size_hint_y=None, height=dp(116),
                              spacing=dp(2), padding=(dp(8), dp(4)))
-            card.add_widget(L("%d. %s" % (i + 1, q["question"]), size="15sp",
-                              size_hint_y=None, height=dp(40)))
+            card.add_widget(L("%d. %s" % (i + 1, q["question"]), size="14sp",
+                              size_hint_y=None, height=dp(52)))
             card.add_widget(L("إجابتك: %s" % (q["options"][chosen] if chosen is not None else "بدون إجابة"),
                               size="14sp", color=DANGER, size_hint_y=None, height=dp(26)))
             card.add_widget(L("الصواب: %s" % q["options"][q["answer"]], size="14sp",
@@ -511,15 +783,9 @@ class SettingsScreen(Base):
             minutes_row.add_widget(btn)
         form.add_widget(minutes_row)
 
-        self.limit_label = L("", size="17sp", size_hint_y=None, height=dp(36))
+        self.limit_label = L("", size="15sp", color=(0.65, 0.72, 0.85, 1),
+                             size_hint_y=None, height=dp(34))
         form.add_widget(self.limit_label)
-        limit_row = BoxLayout(size_hint_y=None, height=dp(50), spacing=dp(8))
-        for delta, text, color in ((-5, "- 5", DANGER), (-1, "- 1", MUTED),
-                                   (1, "+ 1", MUTED), (5, "+ 5", SUCCESS)):
-            btn = B(text, bg=color, size="16sp", height=dp(50))
-            btn.bind(on_press=lambda _w, d=delta: self.bump("question_limit", d, 0, 500))
-            limit_row.add_widget(btn)
-        form.add_widget(limit_row)
 
         self.switches = {}
         for key, text in (("shuffle_questions", "ترتيب عشوائي للأسئلة"),
@@ -545,8 +811,8 @@ class SettingsScreen(Base):
         settings = self.app.settings
         self.minutes_label.set("مدة الاختبار: %d دقيقة" % settings["minutes"])
         limit = settings["question_limit"]
-        self.limit_label.set("عدد الأسئلة في الاختبار: %s"
-                             % ("كل الأسئلة" if not limit else str(limit)))
+        self.limit_label.set("عدد الأسئلة: %s — يُضبط في شاشة «اختر الاختبار»"
+                             % ("الكل" if not limit else str(limit)))
         for key, switch in self.switches.items():
             switch.active = bool(settings[key])
 
@@ -589,9 +855,13 @@ class HistoryScreen(Base):
         for item in history:
             pct = round(item["score"] * 100.0 / max(item["total"], 1))
             minutes, secs = divmod(int(item["seconds"]), 60)
-            row = L("%s   |   %d/%d   |   %d%%   |   %02d:%02d"
-                    % (item["date"], item["score"], item["total"], pct, minutes, secs),
-                    size="15sp", size_hint_y=None, height=dp(38),
+            tag = data.CATEGORY_TITLES.get(item.get("category") or "", "كل الفئات")
+            level = data.LEVEL_TITLES.get(item.get("level") or 0)
+            if level:
+                tag += " · " + level
+            row = L("%s   |   %d/%d (%d%%)   |   %02d:%02d   |   %s"
+                    % (item["date"], item["score"], item["total"], pct, minutes, secs, tag),
+                    size="14sp", size_hint_y=None, height=dp(40),
                     color=SUCCESS if pct >= 50 else DANGER)
             self.list_box.add_widget(row)
 
@@ -618,8 +888,8 @@ class SmartQuizApp(App):
 
         self.sm = ScreenManager(transition=NoTransition())
         self.screens = {}
-        for cls in (HomeScreen, ManageScreen, EditScreen, QuizScreen, ResultScreen,
-                    SettingsScreen, HistoryScreen):
+        for cls in (HomeScreen, PickScreen, ManageScreen, EditScreen, QuizScreen,
+                    ResultScreen, SettingsScreen, HistoryScreen):
             screen = cls(self)
             self.screens[screen.name] = screen
             self.sm.add_widget(screen)
@@ -645,8 +915,8 @@ class SmartQuizApp(App):
             return False
         if current == "quiz":
             confirm("إنهاء الاختبار الآن وعرض النتيجة؟", self.finish_quiz, "إنهاء")
-        elif current in ("edit", "manage"):
-            self.go("manage" if current == "edit" else "home")
+        elif current == "edit":
+            self.go("manage")
         else:
             self.go("home")
         return True
@@ -665,11 +935,18 @@ class SmartQuizApp(App):
             self.go("manage")
             return
         self.questions = data.build_quiz(self.bank, self.settings)
+        if not self.questions:
+            toast("لا توجد أسئلة مطابقة للفئة والمستوى المختارين.")
+            self.go("pick")
+            return
         self.answers = {}
         self.revealed = set()
         self.index = 0
         self.remaining = self.settings["minutes"] * 60
         self.started_at = time.time()
+        title = data.CATEGORY_TITLES.get(self.settings["category"], "كل الفئات")
+        level = data.LEVEL_TITLES.get(self.settings["level"])
+        self.screens["quiz"].title_label.set(title + (" · " + level if level else ""))
         self.render()
         self.go("quiz")
         self.start_timer()
@@ -724,7 +1001,8 @@ class SmartQuizApp(App):
                     if self.answers.get(i) == q["answer"])
         elapsed = time.time() - self.started_at
         if self.questions:
-            data.add_history(score, len(self.questions), elapsed)
+            data.add_history(score, len(self.questions), elapsed,
+                             self.settings.get("category", ""), self.settings.get("level", 0))
         self.screens["result"].show(self.questions, self.answers, score, elapsed)
         self.go("result")
 

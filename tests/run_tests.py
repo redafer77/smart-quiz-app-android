@@ -60,6 +60,31 @@ def test_arabic():
           all(not (0x0620 <= ord(c) <= 0x064A) for c in ar("تطبيق الاختبارات")))
 
 
+def test_wrap():
+    section("التفاف الأسطر")
+    from arabic_support import ar, wrap
+
+    # قياس تقريبي: عرض ثابت لكل حرف
+    measure = lambda t: len(t) * 10.0
+    text = "من هو العالم المسلم الذي وضع أسس علم الجبر وكتب كتاب الجبر والمقابلة في بغداد؟"
+    lines = wrap(text, 200, measure).split("\n")
+
+    check("انقسم إلى عدة أسطر", len(lines) > 1, len(lines))
+    check("كل سطر ضمن العرض", all(measure(l) <= 200 for l in lines[:-1]))
+
+    # الترتيب المنطقي محفوظ: أول كلمة منطقية في أول سطر
+    first_word = ar("من")
+    check("أول سطر يبدأ ببداية الجملة", first_word in lines[0], lines[0])
+    last_word = ar("بغداد؟")
+    check("آخر سطر يحوي نهاية الجملة", last_word in lines[-1], lines[-1])
+
+    check("الأسطر الأصلية محفوظة", len(wrap("سطر أول\nسطر ثانٍ", 10000, measure).split("\n")) == 2)
+    long_word = "كلمةطويلةجداااااااا"
+    check("كلمة أطول من السطر لا تُفقد", wrap(long_word, 20, measure) == ar(long_word))
+    check("عرض غير صالح يتراجع لـ ar()", wrap("مرحبا", 0, measure) == ar("مرحبا"))
+    check("نص فارغ آمن", wrap("", 100, measure) == "")
+
+
 # ---------------------------------------------------------------- بنك الأسئلة
 
 def test_data():
@@ -90,8 +115,105 @@ def test_data():
     check("خلط الخيارات لا يغيّر البنك الأصلي",
           bank[0]["options"] == data.load_bank()[0]["options"])
 
+    # الدمج والاستيراد
+    merged, added = data.merge_bank(list(bank), data.default_bank())
+    check("الدمج يتجاهل المكرر", added == 0 and len(merged) == len(bank))
+    merged, added = data.merge_bank([], [{"question": "س", "options": ["أ", "ب"], "answer": 1},
+                                         {"question": "س", "options": ["ج", "د"], "answer": 0}])
+    check("الدمج يزيل التكرار داخل الدفعة", added == 1 and len(merged) == 1)
+
+    path = os.path.join(data.storage_dir(), "questions_import.txt")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("سؤال: سؤال مستورد؟\nأ) لا\nب) نعم\nالإجابة: ب\n")
+    check("اكتشاف ملف الاستيراد", path in data.import_candidates())
+    imported = data.import_from_file(path)
+    check("قراءة ملف الاستيراد",
+          len(imported) == 1 and imported[0]["options"][imported[0]["answer"]] == "نعم", imported)
+    os.remove(path)
+
+    check("مسارات التصدير غير فارغة", len(data.export_targets()) >= 1)
+    check("shared_dir لا يفشل على سطح المكتب", data.shared_dir() is None)
+
 
 # ---------------------------------------------------------------- منطق التطبيق
+
+def test_categories():
+    section("الفئات والمستويات")
+    import quiz_data as data
+
+    bank = data.default_bank()
+    cats = data.available_categories(bank)
+    check("البنك المضمَّن كبير", len(bank) >= 500, len(bank))
+    check("عدة فئات", len(cats) >= 5, [c[0] for c in cats])
+    check("مجموع الفئات = حجم البنك", sum(c[2] for c in cats) == len(bank))
+    check("كل سؤال له فئة ومستوى",
+          all(q["category"] in data.CATEGORY_TITLES and 1 <= q["level"] <= 4 for q in bank))
+    check("لا أسئلة مكرّرة", len({q["question"] for q in bank}) == len(bank))
+    check("مؤشر الإجابة داخل النطاق",
+          all(0 <= q["answer"] < len(q["options"]) for q in bank))
+    check("أربعة خيارات مختلفة لكل سؤال",
+          all(len(set(q["options"])) == len(q["options"]) >= 2 for q in bank))
+
+    spread = {}
+    for q in bank:
+        spread[q["answer"]] = spread.get(q["answer"], 0) + 1
+    widest = max(spread.values()) - min(spread.values())
+    check("مواضع الإجابة الصحيحة متوازنة", widest <= len(bank) * 0.05, spread)
+    check("كل المواضع الأربعة مستعملة", len(spread) == 4, sorted(spread))
+
+    key = cats[0][0]
+    subset = data.filter_bank(bank, key)
+    check("الترشيح بالفئة", subset and all(q["category"] == key for q in subset))
+    subset2 = data.filter_bank(bank, key, 3)
+    check("الترشيح بالفئة والمستوى",
+          subset2 and all(q["category"] == key and q["level"] == 3 for q in subset2))
+    check("مستويات الفئة", len(data.available_levels(bank, key)) >= 1)
+
+    quiz = data.build_quiz(bank, dict(data.DEFAULT_SETTINGS, category=key, level=2,
+                                      question_limit=7))
+    check("بناء اختبار مُرشَّح",
+          len(quiz) == 7 and all(q["category"] == key and q["level"] == 2 for q in quiz))
+
+    empty = data.build_quiz(bank, dict(data.DEFAULT_SETTINGS, category="no-such-category"))
+    check("فئة بلا أسئلة تُعيد قائمة فارغة", empty == [])
+
+    custom = data._normalize([{"question": "س", "options": ["أ", "ب"], "answer": 0}])
+    check("السؤال بلا فئة يصير «أسئلتي»", custom[0]["category"] == data.CUSTOM_CATEGORY)
+    check("المستوى الافتراضي 1", custom[0]["level"] == 1)
+
+
+def test_font_coverage():
+    """كل محرف يعرضه التطبيق يجب أن يكون له رسم في الخط، وإلا ظهر مربّعاً فارغاً."""
+    section("تغطية الخط")
+    import ast
+
+    from arabic_support import _FONT_FILE, ar
+    from font_coverage import missing_glyphs, supported_codepoints
+    import quiz_data as data
+
+    check("ملف الخط موجود", os.path.exists(_FONT_FILE))
+    codes = supported_codepoints(_FONT_FILE)
+    check("الخط يحوي رسوماً كثيرة", len(codes) > 1000, len(codes))
+    check("الخط يغطي الأشكال السياقية",
+          sum(1 for c in range(0xFE70, 0xFEFD) if c in codes) > 130)
+
+    pieces = []
+    for q in data.default_bank():
+        pieces.append(q["question"])
+        pieces.extend(q["options"])
+    for name in ("main.py", "quiz_data.py"):
+        tree = ast.parse(open(os.path.join(ROOT, name), encoding="utf-8").read())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                pieces.append(node.value)
+    pieces.extend(title for _key, title in data.CATEGORY_TITLES.items())
+    pieces.extend(title for _lvl, title in data.LEVELS)
+
+    blob = "".join(pieces) + "".join(ar(p) for p in pieces)
+    missing = missing_glyphs(_FONT_FILE, blob)
+    check("لا محارف بلا رسم في الواجهة وبنك الأسئلة",
+          not missing, [(c, hex(ord(c))) for c in missing[:12]])
+
 
 def test_app():
     section("منطق التطبيق")
@@ -101,8 +223,8 @@ def test_app():
     app = main.SmartQuizApp()
     app.build()
     check("كل الشاشات موجودة",
-          sorted(app.screens) == ["edit", "history", "home", "manage", "quiz",
-                                  "result", "settings"], sorted(app.screens))
+          sorted(app.screens) == ["edit", "history", "home", "manage", "pick",
+                                  "quiz", "result", "settings"], sorted(app.screens))
 
     # إضافة سؤال
     app.go_edit(None)
@@ -116,6 +238,18 @@ def test_app():
     check("حفظ سؤال جديد", len(app.bank) == before + 1)
     added = app.bank[-1]
     check("الإجابة الصحيحة مرتبطة بالنص", added["options"][added["answer"]] == "ثانٍ")
+    check("السؤال الجديد في فئة «أسئلتي»", added["category"] == data.CUSTOM_CATEGORY)
+
+    # تبديل الفئة والمستوى في المحرّر
+    app.go_edit(len(app.bank) - 1)
+    editor.cycle_category()
+    editor.pick_level(3)
+    picked = editor.category
+    editor.save()
+    check("تبديل فئة السؤال", app.bank[-1]["category"] == picked and picked != data.CUSTOM_CATEGORY)
+    check("تبديل مستوى السؤال", app.bank[-1]["level"] == 3)
+    app.go_edit(len(app.bank) - 1)
+    check("المحرّر يحمّل فئة السؤال", editor.category == picked and editor.level == 3)
 
     # خيار فارغ في المنتصف
     app.go_edit(None)
@@ -140,11 +274,60 @@ def test_app():
     editor.save()
     check("رفض سؤال بخيار واحد", len(app.bank) == count)
 
+    # استيراد واستعادة الافتراضي
+    manage = app.screens["manage"]
+    kept = len(app.bank)
+    app.bank = []
+    app.save_bank()
+    manage.restore_defaults()
+    check("زر الاستعادة يعرض تأكيداً فقط", len(app.bank) == 0)
+    app.bank, added = data.merge_bank(app.bank, data.default_bank())
+    app.save_bank()
+    check("استعادة الأسئلة الافتراضية", len(app.bank) == added >= 10)
+    manage.export_text()
+    manage.import_text()
+    manage.refresh()
+
     # حذف
     app.screens["manage"].refresh()
     app.bank.pop()
     app.bank.pop()
     app.save_bank()
+
+    # شاشة اختيار الفئة والمستوى
+    pick = app.screens["pick"]
+    app.bank = data.default_bank()
+    app.save_bank()
+    pick.on_pre_enter()
+    first_cat = data.available_categories(app.bank)[0][0]
+    pick._pick_category(first_cat)
+    check("اختيار الفئة يُحفظ", app.settings["category"] == first_cat)
+    pick._pick_level(2)
+    pick._pick_limit(5)
+    app.start_quiz()
+    check("الاختبار يحترم الفئة والمستوى",
+          len(app.questions) == 5
+          and all(q["category"] == first_cat and q["level"] == 2 for q in app.questions))
+    app.finish_quiz()
+    check("السجل يحفظ الفئة", data.load_history()[0]["category"] == first_cat)
+    app.settings["category"] = "no-such-category"
+    app.start_quiz()
+    check("فئة فارغة تُعيد لشاشة الاختيار", app.sm.current == "pick")
+    app.settings.update(category="", level=0)
+    app.save_settings()
+
+    # ترشيح وتصفّح شاشة الإدارة
+    manage = app.screens["manage"]
+    manage.filter_category = ""
+    manage.page = 0
+    manage.refresh()
+    check("الصفحة الأولى محدودة الحجم", len(manage.list_box.children) <= manage.page_size)
+    manage.turn(1)
+    check("الانتقال للصفحة التالية", manage.page == 1)
+    manage.cycle_filter()
+    check("تبديل الفئة يعيد للصفحة الأولى", manage.page == 0)
+    manage.filter_category = ""
+    manage.refresh()
 
     # اختبار كامل بإجابات صحيحة
     app.settings.update(question_limit=3, instant_feedback=True,
@@ -208,7 +391,10 @@ def test_app():
 def main_():
     try:
         test_arabic()
+        test_wrap()
         test_data()
+        test_categories()
+        test_font_coverage()
         test_app()
     finally:
         shutil.rmtree(TMP_HOME, ignore_errors=True)

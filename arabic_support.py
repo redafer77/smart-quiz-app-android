@@ -258,6 +258,37 @@ def ar(text):
     return "\n".join(_bidi_line(reshape(line)) for line in text.split("\n"))
 
 
+# ------------------------------------------------------------- التفاف الأسطر
+
+def wrap(text, max_width, measure):
+    """يلفّ النص العربي على أسطر قبل تحويله للترتيب البصري.
+
+    لا يمكن ترك الالتفاف لـ Kivy: فهو يتعامل مع نص جاهز بصرياً، فيقلب ترتيب
+    الأسطر (يصبح آخر الجملة أول سطر). لذلك نلفّ منطقياً ثم نحوّل كل سطر.
+
+    ``measure`` دالة تُعيد عرض النص المعروض بالبكسل.
+    """
+    if not text:
+        return ar(text)
+    text = str(text)
+    if max_width is None or max_width <= 0:
+        return ar(text)
+
+    lines = []
+    for paragraph in text.split("\n"):
+        words = paragraph.split(" ")
+        current = ""
+        for word in words:
+            candidate = word if not current else current + " " + word
+            if measure(ar(candidate)) <= max_width or not current:
+                current = candidate
+            else:
+                lines.append(current)
+                current = word
+        lines.append(current)
+    return "\n".join(ar(line) for line in lines)
+
+
 # ---------------------------------------------------------------- تسجيل الخط
 
 FONT_NAME = "ArabicUI"

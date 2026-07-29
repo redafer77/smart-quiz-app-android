@@ -12,12 +12,33 @@ HISTORY_FILE = "history.json"
 
 LETTERS = ["أ", "ب", "ج", "د", "هـ", "و"]
 
+CATEGORIES = [
+    ("general", "معلومات عامة"),
+    ("geography", "جغرافيا"),
+    ("history", "تاريخ"),
+    ("science", "علوم"),
+    ("math", "رياضيات"),
+    ("islam", "إسلاميات"),
+    ("arabic", "لغة عربية"),
+    ("tech", "تقنية"),
+    ("sports", "رياضة"),
+    ("culture", "أدب وفنون"),
+]
+CATEGORY_TITLES = dict(CATEGORIES)
+CUSTOM_CATEGORY = "custom"
+CATEGORY_TITLES[CUSTOM_CATEGORY] = "أسئلتي"
+
+LEVELS = [(1, "مبتدئ"), (2, "متوسط"), (3, "متقدّم"), (4, "خبير")]
+LEVEL_TITLES = dict(LEVELS)
+
 DEFAULT_SETTINGS = {
     "minutes": 10,
     "shuffle_questions": True,
     "shuffle_options": False,
     "instant_feedback": True,
-    "question_limit": 0,  # 0 = كل الأسئلة
+    "question_limit": 10,   # 0 = كل الأسئلة
+    "category": "",         # "" = كل الفئات
+    "level": 0,             # 0 = كل المستويات
 }
 
 SAMPLE_BANK = [
@@ -48,6 +69,23 @@ def storage_dir():
     except Exception:
         base = os.getcwd()
     return base
+
+
+def shared_dir():
+    """مجلد التطبيق الظاهر لمدير الملفات على أندرويد (بلا أذونات).
+
+    ‎/sdcard/Android/data/<package>/files — يستعمله المستخدم لوضع ملف
+    الاستيراد أو لأخذ ملف التصدير. يعيد None على سطح المكتب.
+    """
+    try:
+        from jnius import autoclass  # type: ignore
+        activity = autoclass("org.kivy.android.PythonActivity").mActivity
+        directory = activity.getExternalFilesDir(None)
+        if directory is not None:
+            return directory.getAbsolutePath()
+    except Exception:
+        pass
+    return None
 
 
 def _path(name):
@@ -126,9 +164,47 @@ def _normalize(items):
             answer = int(q.get("answer", 0))
         except Exception:
             continue
-        if text and len(options) >= 2:
-            clean.append({"question": text, "options": options, "answer": min(max(answer, 0), len(options) - 1)})
+        if not text or len(options) < 2:
+            continue
+        category = str(q.get("category") or CUSTOM_CATEGORY)
+        if category not in CATEGORY_TITLES:
+            category = CUSTOM_CATEGORY
+        try:
+            level = int(q.get("level", 1))
+        except Exception:
+            level = 1
+        clean.append({
+            "question": text,
+            "options": options,
+            "answer": min(max(answer, 0), len(options) - 1),
+            "category": category,
+            "level": min(max(level, 1), 4),
+        })
     return clean
+
+
+def available_categories(bank):
+    """الفئات الموجودة فعلاً في البنك مع عدد أسئلة كل منها، بترتيب ثابت."""
+    counts = {}
+    for q in bank:
+        counts[q["category"]] = counts.get(q["category"], 0) + 1
+    order = [key for key, _ in CATEGORIES] + [CUSTOM_CATEGORY]
+    return [(key, CATEGORY_TITLES[key], counts[key]) for key in order if key in counts]
+
+
+def available_levels(bank, category=""):
+    counts = {}
+    for q in bank:
+        if category and q["category"] != category:
+            continue
+        counts[q["level"]] = counts.get(q["level"], 0) + 1
+    return [(lvl, LEVEL_TITLES[lvl], counts[lvl]) for lvl, _ in LEVELS if lvl in counts]
+
+
+def filter_bank(bank, category="", level=0):
+    return [q for q in bank
+            if (not category or q["category"] == category)
+            and (not level or q["level"] == level)]
 
 
 def load_bank():
@@ -166,6 +242,62 @@ def save_bank(questions):
     _write_json(BANK_FILE, questions)
 
 
+def default_bank():
+    """بنك الأسئلة المضمَّن مع التطبيق."""
+    bundled = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", BANK_FILE)
+    try:
+        with open(bundled, "r", encoding="utf-8") as f:
+            seed = _normalize(json.load(f))
+        if seed:
+            return seed
+    except Exception:
+        pass
+    return [dict(q, options=list(q["options"])) for q in SAMPLE_BANK]
+
+
+def merge_bank(bank, new_questions):
+    """يضيف الأسئلة غير المكرّرة ويعيد (البنك الجديد، عدد المضاف)."""
+    seen = {q["question"].strip() for q in bank}
+    added = 0
+    for q in _normalize(new_questions):
+        if q["question"].strip() in seen:
+            continue
+        bank.append(q)
+        seen.add(q["question"].strip())
+        added += 1
+    return bank, added
+
+
+IMPORT_NAMES = ("questions_import.txt", "questions.txt", "questions_export.txt")
+
+
+def import_candidates():
+    """مسارات ملفات نصية يمكن الاستيراد منها."""
+    found = []
+    for base in (shared_dir(), storage_dir(), os.getcwd()):
+        if not base:
+            continue
+        for name in IMPORT_NAMES:
+            path = os.path.join(base, name)
+            if os.path.exists(path) and path not in found:
+                found.append(path)
+    return found
+
+
+def import_from_file(path):
+    with open(path, "r", encoding="utf-8") as f:
+        return parse_text_bank(f.read())
+
+
+def export_targets():
+    """أماكن كتابة ملف التصدير: مساحة التطبيق + المجلد الظاهر إن وُجد."""
+    targets = [os.path.join(storage_dir(), "questions_export.txt")]
+    shared = shared_dir()
+    if shared:
+        targets.append(os.path.join(shared, "questions_export.txt"))
+    return targets
+
+
 # ------------------------------------------------------------------ الإعدادات
 
 def load_settings():
@@ -177,6 +309,14 @@ def load_settings():
                 data[key] = stored[key]
     data["minutes"] = max(1, min(int(data["minutes"] or 1), 180))
     data["question_limit"] = max(0, int(data["question_limit"] or 0))
+    if data["category"] not in CATEGORY_TITLES:
+        data["category"] = ""
+    try:
+        data["level"] = int(data["level"])
+    except Exception:
+        data["level"] = 0
+    if data["level"] not in LEVEL_TITLES:
+        data["level"] = 0
     return data
 
 
@@ -191,12 +331,14 @@ def load_history():
     return data if isinstance(data, list) else []
 
 
-def add_history(score, total, seconds):
+def add_history(score, total, seconds, category="", level=0):
     entry = {
         "date": time.strftime("%Y-%m-%d %H:%M"),
         "score": score,
         "total": total,
         "seconds": int(seconds),
+        "category": category,
+        "level": level,
     }
     history = load_history()
     history.insert(0, entry)
@@ -212,7 +354,8 @@ def clear_history():
 
 def build_quiz(bank, settings):
     """يجهّز قائمة أسئلة الاختبار حسب الإعدادات."""
-    items = [dict(q, options=list(q["options"])) for q in bank]
+    pool = filter_bank(bank, settings.get("category", ""), settings.get("level", 0))
+    items = [dict(q, options=list(q["options"])) for q in pool]
     if settings.get("shuffle_questions"):
         random.shuffle(items)
     limit = settings.get("question_limit") or 0
